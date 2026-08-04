@@ -118,6 +118,18 @@
       border-color: #8c8e8c;
       background: linear-gradient(180deg, #777d81, #4f5559);
     }
+    #planOptimalAutoloaderButton {
+      border-color: #786b42;
+      background: linear-gradient(180deg, #625a3c, #302d22);
+      color: #fff;
+      text-shadow: 0 1px 0 rgba(0,0,0,.45);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+    }
+    #planOptimalAutoloaderButton:hover { filter: brightness(1.14); border-color: #9a8952; }
+    html[data-theme="light"] #planOptimalAutoloaderButton {
+      border-color: #8f825b;
+      background: linear-gradient(180deg, #8b805c, #5a543e);
+    }
     .action-button:disabled { opacity: .45; cursor: not-allowed; }
 
     .controls {
@@ -458,6 +470,7 @@
         <div class="action-group">
           <button id="planCheapestButton" class="action-button" type="button">Plan quickest route</button>
           <button id="planOptimalButton" class="action-button" type="button">Plan optimal route</button>
+          <button id="planOptimalAutoloaderButton" class="action-button" type="button">Plan optimal autoloader</button>
           <button id="targetsCurrentButton" class="action-button" type="button">Clear planned upgrades</button>
           <button id="resetButton" class="action-button" type="button" title="Clear every Current and Target skill bar for this crew type">Reset crew</button>
         </div>
@@ -465,7 +478,7 @@
       </div>
     </section>
 
-    <p class="note">Each pair of half-bars equals one full skill bar. Every skill advances in 0.5 crew-level steps except Repair Rank, which advances in full levels. “Plan quickest route” finds the lowest-Crew-XP combination. “Plan optimal route” prioritises the skills that most improve combat handling, reloading, repairs and survivability while avoiding low-value side skills such as artillery timing. Data uses the current War Thunder Wiki crew-cost table; this unofficial page stores everything only in your browser.</p>
+    <p class="note">Each pair of half-bars equals one full skill bar. Every skill advances in 0.5 crew-level steps except Repair Rank, which advances in full levels. “Plan quickest route” finds the lowest-Crew-XP combination. “Plan optimal route” prioritises the skills that most improve combat handling, reloading, repairs and survivability while avoiding low-value side skills such as artillery timing. “Plan optimal autoloader” does the same for Ground crews while excluding the entire Loader role. Data uses the current War Thunder Wiki crew-cost table; this unofficial page stores everything only in your browser.</p>
   </main>
 
   <script>
@@ -751,22 +764,27 @@
       return Math.ceil(xp * 1000 / RATE[state.mode].crewPer1000);
     }
 
-    function optimalWeight(s) {
+    function isAutoloaderExcludedSkill(s) {
+      return state.type === "ground" && s.group === "Loader";
+    }
+
+    function optimalWeight(s, profile = "standard") {
+      if (profile === "autoloader" && isAutoloaderExcludedSkill(s)) return 0;
       return OPTIMAL_WEIGHT[state.type]?.[s.id] || 0;
     }
 
-    function optimalMaximumLevel() {
+    function optimalMaximumLevel(profile = "standard") {
       let level = totalLevel("current");
       for (const s of currentSkills()) {
-        if (optimalWeight(s) <= 0) continue;
+        if (optimalWeight(s, profile) <= 0) continue;
         const currentStep = state.values[state.type][s.id].current;
         level += levelValue(s, maxStep(s)) - levelValue(s, currentStep);
       }
       return level;
     }
 
-    function optimalIncrementScore(s, nextStep) {
-      const base = optimalWeight(s);
+    function optimalIncrementScore(s, nextStep, profile = "standard") {
+      const base = optimalWeight(s, profile);
       if (base <= 0) return -Infinity;
       const min = minStep(s);
       const span = Math.max(1, maxStep(s) - min);
@@ -925,13 +943,27 @@
         ? `Find the lowest-XP route from level ${levelFmt.format(current)} to at least ${levelFmt.format(goal)}`
         : "Enter a target crew level above the current level";
 
-      const optimalMax = optimalMaximumLevel();
+      const optimalMax = optimalMaximumLevel("standard");
       $("planOptimalButton").disabled = !(goal > current && goal <= optimalMax);
       $("planOptimalButton").title = goal <= current
         ? "Enter a target crew level above the current level"
         : goal > optimalMax
           ? `Core gameplay skills can reach level ${levelFmt.format(optimalMax)} from this setup without low-value filler skills`
           : `Prioritise combat, handling, repair and survivability skills up to level ${levelFmt.format(goal)}`;
+
+      const autoloaderButton = $("planOptimalAutoloaderButton");
+      if (state.type !== "ground") {
+        autoloaderButton.disabled = true;
+        autoloaderButton.title = "The autoloader route is available for Ground crews only";
+      } else {
+        const autoloaderMax = optimalMaximumLevel("autoloader");
+        autoloaderButton.disabled = !(goal > current && goal <= autoloaderMax);
+        autoloaderButton.title = goal <= current
+          ? "Enter a target crew level above the current level"
+          : goal > autoloaderMax
+            ? `Core non-loader skills can reach level ${levelFmt.format(autoloaderMax)} from this setup`
+            : `Plan an optimal Ground route to level ${levelFmt.format(goal)} without spending on the Loader role`;
+      }
     }
 
     function renderControls() {
@@ -1031,19 +1063,26 @@
       renderAll();
     }
 
-    function planOptimalRoute() {
+    function planOptimalRoute(profile = "standard") {
       const data = DATA[state.type];
       const current = totalLevel("current");
       const requested = clamp(state.goalLevel[state.type], 0, data.maxLevel);
       const goal = Math.ceil(requested * 2) / 2;
-      const optimalMax = optimalMaximumLevel();
+      const isAutoloader = profile === "autoloader";
 
+      if (isAutoloader && state.type !== "ground") {
+        setStatus("The optimal autoloader route is available for Ground crews only.", "bad");
+        return;
+      }
+
+      const optimalMax = optimalMaximumLevel(profile);
       if (goal <= current) {
         setStatus(`Choose a target above the current crew level of ${levelFmt.format(current)}.`, "bad");
         return;
       }
       if (goal > optimalMax) {
-        setStatus(`Core gameplay skills can only reach level ${levelFmt.format(optimalMax)} from this setup without using low-value filler skills.`, "bad");
+        const routeName = isAutoloader ? "Core non-loader skills" : "Core gameplay skills";
+        setStatus(`${routeName} can only reach level ${levelFmt.format(optimalMax)} from this setup without using low-value filler skills.`, "bad");
         return;
       }
 
@@ -1058,7 +1097,7 @@
         const candidates = [];
 
         for (const s of skills) {
-          if (optimalWeight(s) <= 0) continue;
+          if (optimalWeight(s, profile) <= 0) continue;
           const from = planned[s.id];
           const nextStep = from + 1;
           if (nextStep > maxStep(s)) continue;
@@ -1068,7 +1107,7 @@
             s,
             nextStep,
             units,
-            score: optimalIncrementScore(s, nextStep),
+            score: optimalIncrementScore(s, nextStep, profile),
             cost: costBetween(s, from, nextStep)
           });
         }
@@ -1077,7 +1116,7 @@
         // half-level core upgrade remains. This is rare, but avoids dead ends.
         if (!candidates.length) {
           for (const s of skills) {
-            if (optimalWeight(s) <= 0) continue;
+            if (optimalWeight(s, profile) <= 0) continue;
             const from = planned[s.id];
             const nextStep = from + 1;
             if (nextStep > maxStep(s)) continue;
@@ -1085,14 +1124,17 @@
               s,
               nextStep,
               units: s.kind === "rank" ? 2 : 1,
-              score: optimalIncrementScore(s, nextStep),
+              score: optimalIncrementScore(s, nextStep, profile),
               cost: costBetween(s, from, nextStep)
             });
           }
         }
 
         if (!candidates.length) {
-          setStatus("No further core-skill upgrades are available for this crew.", "bad");
+          const message = isAutoloader
+            ? "No further core non-loader upgrades are available for this Ground crew."
+            : "No further core-skill upgrades are available for this crew.";
+          setStatus(message, "bad");
           return;
         }
 
@@ -1116,7 +1158,11 @@
       const plannedLevel = totalLevel("target");
       const overshoot = Math.max(0, plannedLevel - goal);
       const suffix = overshoot > 0 ? `; nearest core-skill result is level ${levelFmt.format(plannedLevel)}` : "";
-      setStatus(`Optimal gameplay route to level ${levelFmt.format(goal)} planned for ${intFmt.format(addedCost)} Crew XP${suffix}. Low-value filler skills were ignored.`, "good");
+      const routeLabel = isAutoloader ? "Optimal autoloader route" : "Optimal gameplay route";
+      const ignored = isAutoloader
+        ? "The Loader role and low-value filler skills were ignored."
+        : "Low-value filler skills were ignored.";
+      setStatus(`${routeLabel} to level ${levelFmt.format(goal)} planned for ${intFmt.format(addedCost)} Crew XP${suffix}. ${ignored}`, "good");
       renderAll();
     }
 
@@ -1173,7 +1219,8 @@
     });
     $("themeButton").addEventListener("click", () => { state.theme = state.theme === "dark" ? "light" : "dark"; renderAll(); });
     $("planCheapestButton").addEventListener("click", planCheapestRoute);
-    $("planOptimalButton").addEventListener("click", planOptimalRoute);
+    $("planOptimalButton").addEventListener("click", () => planOptimalRoute("standard"));
+    $("planOptimalAutoloaderButton").addEventListener("click", () => planOptimalRoute("autoloader"));
     $("targetsCurrentButton").addEventListener("click", clearTargets);
     $("resetButton").addEventListener("click", resetCrew);
 
